@@ -1,0 +1,65 @@
+{{ if .Values.backup.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "fullname" . }}-mongobackup
+spec: 
+  {{- if eq .Values.backup.storage.type "pvc" }}
+    {{ if .Values.backup.storage.pvc.storageClassName }}
+  storageClassName: {{ .Values.backup.storage.pvc.storageClassName | quote }}
+    {{- end }}
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.backup.storage.pvc.size | quote }}
+  {{- end }}
+  {{- if eq .Values.backup.storage.type "s3" }}
+  storageClassName: {{ .Values.backup.storage.s3.storageClassName | quote }}
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.backup.storage.s3.size | quote }}
+  {{- end }}
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "fullname" . }}-mongobackup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: {{ include "fullname" . }}-mongobackup
+          restartPolicy: Never
+          containers:
+            - name: {{ include "fullname" . }}-mongobackup
+              image: {{ .Values.backup.image | quote  }}
+              volumeMounts:
+                - mountPath: "/data/mongobackup"
+                  name: backup-storage
+              command: ["/bin/bash", "-c"]
+              args: 
+                - |
+                  mongodump -u ${USER} -p ${PASS} --db ${DB_NAME} -h ${HOST} --gzip --archive=/data/mongobackup/mongo_$(date +%d%m%Y).gz;
+                  ls -t /data/mongobackup/ | awk "NR>${SAVE_DAYS}" | xargs rm -f;
+              env:
+                - name: DB_NAME
+                  value: {{ .Values.options.mongodb | quote }}
+                - name: USER
+                  value: {{ .Values.backup.mongoUser | quote }}
+                - name: PASS
+                  value: {{ .Values.backup.mongoPass | quote }}
+                - name: HOST
+                  value: {{ .Values.backup.mongoHost | quote }}
+                - name: SAVE_DAYS
+                  value: {{ .Values.backup.saveDays | quote }}
+{{- end }}
